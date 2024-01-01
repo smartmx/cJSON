@@ -83,7 +83,7 @@ then using the CJSON_API_VISIBILITY flag to "export" the same symbols the way CJ
 /* project version */
 #define CJSON_VERSION_MAJOR 1
 #define CJSON_VERSION_MINOR 7
-#define CJSON_VERSION_PATCH 16
+#define CJSON_VERSION_PATCH 17
 
 #include "cJSON_Config.h"
 #include <stddef.h>
