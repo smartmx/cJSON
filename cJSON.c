@@ -350,8 +350,8 @@ CJSON_PUBLIC(char*) cJSON_SetValuestring(cJSON *object, const char *valuestring)
         return NULL;
     }
 
-    v1_len = strlen(valuestring);
-    v2_len = strlen(object->valuestring);
+    v1_len = cJSON_STRLEN(valuestring);
+    v2_len = cJSON_STRLEN(object->valuestring);
 
     if (v1_len <= v2_len)
     {
