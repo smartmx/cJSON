@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, smartmx - smartmx@qq.com
+ * Copyright (c) 2023-2025, smartmx - smartmx@qq.com
  * Copyright (c) 2009-2017 Dave Gamble and cJSON contributors
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
