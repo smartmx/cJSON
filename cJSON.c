@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, smartmx - smartmx@qq.com
+ * Copyright (c) 2023-2025, smartmx - smartmx@qq.com
  * Copyright (c) 2009-2017 Dave Gamble and cJSON contributors
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -112,7 +112,7 @@ CJSON_PUBLIC(double) cJSON_GetNumberValue(const cJSON *const item)
 }
 
 /* This is a safeguard to prevent copy-pasters from using incompatible C and header files */
-#if (CJSON_VERSION_MAJOR != 1) || (CJSON_VERSION_MINOR != 7) || (CJSON_VERSION_PATCH != 17)
+#if (CJSON_VERSION_MAJOR != 1) || (CJSON_VERSION_MINOR != 7) || (CJSON_VERSION_PATCH != 18)
     #error cJSON.h and cJSON.c have different versions. Make sure that both have the same.
 #endif
 
@@ -198,10 +198,12 @@ CJSON_PUBLIC(void) cJSON_Delete(cJSON *item)
         if (!(item->type & cJSON_IsReference) && (item->valuestring != NULL))
         {
             cJSON_free(item->valuestring);
+            item->valuestring = NULL;
         }
         if (!(item->type & cJSON_StringIsConst) && (item->string != NULL))
         {
             cJSON_free(item->string);
+            item->string = NULL;
         }
         cJSON_free(item);
         item = next;
@@ -331,22 +333,34 @@ CJSON_PUBLIC(double) cJSON_SetNumberHelper(cJSON *object, double number)
     return object->valuedouble = number;
 }
 
-CJSON_PUBLIC(char *) cJSON_SetValuestring(cJSON *object, const char *valuestring)
+/* Note: when passing a NULL valuestring, cJSON_SetValuestring treats this as an error and return NULL */
+CJSON_PUBLIC(char*) cJSON_SetValuestring(cJSON *object, const char *valuestring)
 {
     char *copy = NULL;
+    size_t v1_len;
+    size_t v2_len;
     /* if object's type is not cJSON_String or is cJSON_IsReference, it should not set valuestring */
     if ((object == NULL) || !(object->type & cJSON_String) || (object->type & cJSON_IsReference))
     {
         return NULL;
     }
-    /* return NULL if the object is corrupted */
-    if (object->valuestring == NULL)
+    /* return NULL if the object is corrupted or valuestring is NULL */
+    if (object->valuestring == NULL || valuestring == NULL)
     {
         return NULL;
     }
-    if (cJSON_STRLEN(valuestring) <= cJSON_STRLEN(object->valuestring))
+
+    v1_len = strlen(valuestring);
+    v2_len = strlen(object->valuestring);
+
+    if (v1_len <= v2_len)
     {
-        cJSON_STRCPY(object->valuestring, valuestring);
+        /* strcpy does not handle overlapping string: [X1, X2] [Y1, Y2] => X2 < Y1 or Y2 < X1 */
+        if (!( valuestring + v1_len < object->valuestring || object->valuestring + v2_len < valuestring ))
+        {
+            return NULL;
+        }
+        strcpy(object->valuestring, valuestring);
         return object->valuestring;
     }
     copy = (char *) cJSON_strdup((const unsigned char *)valuestring);
@@ -500,6 +514,10 @@ static cJSON_bool print_number(const cJSON *const item, printbuffer *const outpu
     if (isnan(d) || isinf(d))
     {
         length = cJSON_SPRINTF((char *)number_buffer, "null");
+    }
+    else if(d == (double)item->valueint)
+    {
+        length = cJSON_SPRINTF((char*)number_buffer, "%d", item->valueint);
     }
     else
     {
@@ -823,6 +841,7 @@ fail:
     if (output != NULL)
     {
         cJSON_free(output);
+        output = NULL;
     }
 
     if (input_pointer != NULL)
@@ -1153,6 +1172,7 @@ static unsigned char *print(const cJSON *const item, cJSON_bool format)
 
         /* free the buffer */
         cJSON_free(buffer->buffer);
+        buffer->buffer = NULL;
     }
 
     return printed;
@@ -1161,11 +1181,13 @@ fail:
     if (buffer->buffer != NULL)
     {
         cJSON_free(buffer->buffer);
+        buffer->buffer = NULL;
     }
 
     if (printed != NULL)
     {
         cJSON_free(printed);
+        printed = NULL;
     }
 
     return NULL;
@@ -1205,6 +1227,7 @@ CJSON_PUBLIC(char *) cJSON_PrintBuffered(const cJSON *item, int prebuffer, cJSON
     if (!print_value(item, &p))
     {
         cJSON_free(p.buffer);
+        p.buffer = NULL;
         return NULL;
     }
 
@@ -1574,6 +1597,11 @@ static cJSON_bool parse_object(cJSON *const item, parse_buffer *const input_buff
             current_item->next = new_item;
             new_item->prev = current_item;
             current_item = new_item;
+        }
+
+        if (cannot_access_at_index(input_buffer, 1))
+        {
+            goto fail; /* nothing comes after the comma */
         }
 
         /* parse the name of the child */
@@ -2110,7 +2138,7 @@ CJSON_PUBLIC(cJSON *) cJSON_AddArrayToObject(cJSON *const object, const char *co
 
 CJSON_PUBLIC(cJSON *) cJSON_DetachItemViaPointer(cJSON *parent, cJSON *const item)
 {
-    if ((parent == NULL) || (item == NULL))
+    if ((parent == NULL) || (item == NULL) || (item != parent->child && item->prev == NULL))
     {
         return NULL;
     }
@@ -2635,7 +2663,14 @@ CJSON_PUBLIC(cJSON *) cJSON_CreateStringArray(const char *const *strings, int co
 }
 
 /* Duplication */
+cJSON * cJSON_Duplicate_rec(const cJSON *item, size_t depth, cJSON_bool recurse);
+
 CJSON_PUBLIC(cJSON *) cJSON_Duplicate(const cJSON *item, cJSON_bool recurse)
+{
+    return cJSON_Duplicate_rec(item, 0, recurse );
+}
+
+cJSON * cJSON_Duplicate_rec(const cJSON *item, size_t depth, cJSON_bool recurse)
 {
     cJSON *newitem = NULL;
     cJSON *child = NULL;
@@ -2682,7 +2717,10 @@ CJSON_PUBLIC(cJSON *) cJSON_Duplicate(const cJSON *item, cJSON_bool recurse)
     child = item->child;
     while (child != NULL)
     {
-        newchild = cJSON_Duplicate(child, true); /* Duplicate (with recurse) each item in the ->next chain */
+        if(depth >= CJSON_CIRCULAR_LIMIT) {
+            goto fail;
+        }
+        newchild = cJSON_Duplicate_rec(child, depth + 1, true); /* Duplicate (with recurse) each item in the ->next chain */
         if (!newchild)
         {
             goto fail;
